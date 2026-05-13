@@ -87,11 +87,9 @@ export interface SrsState {
 export type CardLevel = "hard" | "medium" | "easy";
 
 // ===== Phase 1: Scenario Generator =====
-export type ContextPackId =
-  | "software-engineering"
-  | "switzerland-life"
-  | "health-nutrition"
-  | "board-games";
+// Pack id is just a string - this allows adding new packs without changing type defs
+// and lets the "custom" pack pass through.
+export type ContextPackId = string;
 
 export interface ContextPack {
   id: ContextPackId;
@@ -101,6 +99,13 @@ export interface ContextPack {
   emoji: string;
   themes: string[];
   vocabulary_hints: string[]; // German vocabulary hints for the LLM prompt
+}
+
+// Used when user picks "custom" - provides their own context to the LLM.
+export interface CustomContext {
+  label: string;        // short user-given title
+  description: string;  // freeform description of the context
+  vocabulary?: string;  // optional comma-separated German vocab hints
 }
 
 export interface GeneratedExercise {

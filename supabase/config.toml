@@ -1,6 +1,6 @@
 # Supabase project config
-# Schimba project_id daca folosesti alt proiect Supabase decat cel implicit.
-project_id = "tpekplhavhysekrsvkem"
+# Project ref din URL: https://<PROJECT_REF>.supabase.co
+project_id = "ujuckmnfxyoqfloetgvv"
 
 [functions.generate-grammar]
 verify_jwt = false

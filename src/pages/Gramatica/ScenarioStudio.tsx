@@ -3,8 +3,8 @@
 // ============================================================
 
 import { useState, useCallback, useEffect } from "react";
-import { ArrowLeft, Sparkles, AlertTriangle, Loader2 } from "lucide-react";
-import type { ContextPack, Difficulty, GeneratedExercise, NormalizedExercise } from "@/types";
+import { ArrowLeft, Sparkles, AlertTriangle, Loader2, PenSquare } from "lucide-react";
+import type { ContextPack, CustomContext, Difficulty, GeneratedExercise, NormalizedExercise } from "@/types";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 import { CONTEXT_PACKS } from "@/services/contextPacks";
@@ -20,8 +20,18 @@ interface Props {
   onBack: () => void;
 }
 
+type Selection =
+  | { kind: "pack"; pack: ContextPack }
+  | { kind: "custom" }
+  | null;
+
 export function ScenarioStudio({ onBack }: Props) {
-  const [pack, setPack] = useState<ContextPack | null>(null);
+  const [selection, setSelection] = useState<Selection>(null);
+  const [customCtx, setCustomCtx] = useLocalStorage<CustomContext>("scenario_custom_ctx_v1", {
+    label: "",
+    description: "",
+    vocabulary: "",
+  });
   const [difficulty, setDifficulty] = useState<Difficulty>("Mediu");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,17 +41,28 @@ export function ScenarioStudio({ onBack }: Props) {
 
   const apiAvailable = hasApiKey();
 
+  const selectionKey = selection?.kind === "pack" ? selection.pack.id : selection?.kind === "custom" ? "custom" : null;
+
+  // Auto-difficulty: use saved history for this pack
+  useEffect(() => {
+    if (selectionKey) {
+      const h = history[selectionKey] || makeHistory();
+      setDifficulty(h.currentLevel);
+    }
+  }, [selectionKey, history]);
+
   const generate = useCallback(async () => {
-    if (!pack) return;
+    if (!selection) return;
     setLoading(true);
     setError(null);
     setExercises([]);
+    setSource(null);
     try {
-      const result = await generateExercises({
-        packId: pack.id,
-        difficulty,
-        count: 5,
-      });
+      const result = await generateExercises(
+        selection.kind === "pack"
+          ? { packId: selection.pack.id, difficulty, count: 5 }
+          : { packId: "custom", difficulty, count: 5, customContext: customCtx }
+      );
       const norm = result.exercises.map((ex: GeneratedExercise, i) =>
         normalizeExercise(
           {
@@ -53,7 +74,7 @@ export function ScenarioStudio({ onBack }: Props) {
             correctAnswer: ex.correctAnswer,
             explanationRomanian: ex.explanationRomanian,
           },
-          `${pack.id}-${i}`
+          `${selectionKey}-${i}`
         )
       );
       setExercises(norm);
@@ -65,25 +86,19 @@ export function ScenarioStudio({ onBack }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [pack, difficulty]);
-
-  // Auto-difficulty: use saved history for this pack
-  useEffect(() => {
-    if (pack) {
-      const h = history[pack.id] || makeHistory();
-      setDifficulty(h.currentLevel);
-    }
-  }, [pack, history]);
+  }, [selection, difficulty, customCtx, selectionKey]);
 
   const handleResult = (_exId: string, correct: boolean) => {
-    if (!pack) return;
+    if (!selectionKey) return;
     setHistory((h) => {
-      const cur = h[pack.id] || makeHistory();
+      const cur = h[selectionKey] || makeHistory();
       const updated = recordResult(cur, correct);
-      // If difficulty was auto-advanced, reflect it in the picker (next batch)
-      return { ...h, [pack.id]: updated };
+      return { ...h, [selectionKey]: updated };
     });
   };
+
+  const canGenerate = selection?.kind === "pack" ||
+    (selection?.kind === "custom" && customCtx.description.trim().length >= 5);
 
   return (
     <div className="space-y-5">
@@ -103,8 +118,8 @@ export function ScenarioStudio({ onBack }: Props) {
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2 text-sm text-amber-800">
           <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
           <div>
-            <strong>Mod demo:</strong> Supabase nu este configurat. Se folosesc exercitii preincarcate (mock).
-            Pentru generare live, configureaza <code className="bg-amber-100 px-1 rounded">VITE_SUPABASE_URL</code> si <code className="bg-amber-100 px-1 rounded">VITE_SUPABASE_PUBLISHABLE_KEY</code> in <code className="bg-amber-100 px-1 rounded">.env</code>. Vezi README.
+            <strong>Mod demo:</strong> Supabase nu este configurat. Se folosesc exercitii preincarcate (mock) doar pentru pack-urile clasice.
+            Custom topic NU functioneaza fara conexiune AI. Configureaza <code className="bg-amber-100 px-1 rounded">VITE_SUPABASE_URL</code> + <code className="bg-amber-100 px-1 rounded">VITE_SUPABASE_PUBLISHABLE_KEY</code>. Vezi README.
           </div>
         </div>
       )}
@@ -112,36 +127,102 @@ export function ScenarioStudio({ onBack }: Props) {
       {/* Pack selection */}
       <div>
         <div className="text-xs uppercase tracking-wider text-slate-500 font-bold mb-2">1. Alege contextul</div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {CONTEXT_PACKS.map((p) => (
             <button
               key={p.id}
-              onClick={() => setPack(p)}
+              onClick={() => setSelection({ kind: "pack", pack: p })}
               className={cn(
                 "text-left p-4 rounded-xl border-2 transition-all",
-                pack?.id === p.id ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white hover:border-blue-300"
+                selection?.kind === "pack" && selection.pack.id === p.id
+                  ? "border-blue-500 bg-blue-50"
+                  : "border-slate-200 bg-white hover:border-blue-300"
               )}
             >
               <div className="flex items-start gap-3">
-                <div className="text-3xl">{p.emoji}</div>
+                <div className="text-2xl">{p.emoji}</div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-bold text-slate-900">{p.label_ro}</h3>
-                  <p className="text-xs text-slate-500 mt-1">{p.description_ro}</p>
-                  <div className="flex flex-wrap gap-1 mt-2">
-                    {p.themes.slice(0, 3).map((t) => (
-                      <span key={t} className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{t}</span>
-                    ))}
-                    {p.themes.length > 3 && <span className="text-[10px] text-slate-400">+{p.themes.length - 3}</span>}
-                  </div>
+                  <h3 className="font-bold text-slate-900 text-sm">{p.label_ro}</h3>
+                  <p className="text-xs text-slate-500 mt-1 line-clamp-2">{p.description_ro}</p>
                 </div>
               </div>
             </button>
           ))}
+          {/* Custom topic card */}
+          <button
+            onClick={() => setSelection({ kind: "custom" })}
+            className={cn(
+              "text-left p-4 rounded-xl border-2 transition-all",
+              selection?.kind === "custom"
+                ? "border-violet-500 bg-violet-50"
+                : "border-dashed border-slate-300 bg-white hover:border-violet-400"
+            )}
+          >
+            <div className="flex items-start gap-3">
+              <div className="text-2xl">✨</div>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-bold text-slate-900 text-sm flex items-center gap-1">
+                  Custom topic <Pill tone="violet">AI</Pill>
+                </h3>
+                <p className="text-xs text-slate-500 mt-1 line-clamp-2">Scrii tu contextul - AI-ul genereaza exercitii pe orice subiect.</p>
+              </div>
+            </div>
+          </button>
         </div>
       </div>
 
+      {/* Custom context form */}
+      {selection?.kind === "custom" && (
+        <div className="bg-violet-50 border-2 border-violet-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-center gap-2 mb-1">
+            <PenSquare size={16} className="text-violet-600" />
+            <h3 className="font-bold text-violet-900">Descrie contextul tau</h3>
+          </div>
+          <div>
+            <label className="text-xs uppercase text-slate-500 tracking-wider font-bold mb-1 block">Titlu scurt</label>
+            <input
+              type="text"
+              value={customCtx.label}
+              onChange={(e) => setCustomCtx((c) => ({ ...c, label: e.target.value }))}
+              placeholder="ex: Carierea ca pilot, Programare in Python..."
+              className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg outline-none focus:border-violet-500 text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-xs uppercase text-slate-500 tracking-wider font-bold mb-1 block">
+              Descriere context (5-500 caractere) <span className="text-rose-500">*</span>
+            </label>
+            <textarea
+              value={customCtx.description}
+              onChange={(e) => setCustomCtx((c) => ({ ...c, description: e.target.value }))}
+              placeholder="ex: Conversatii intre pilotii la controlul traficului aerian. Decolare, aterizare, comunicare cu turnul..."
+              rows={3}
+              maxLength={500}
+              className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg outline-none focus:border-violet-500 text-sm resize-none"
+            />
+            <div className="text-xs text-slate-400 mt-1 text-right">{customCtx.description.length} / 500</div>
+          </div>
+          <div>
+            <label className="text-xs uppercase text-slate-500 tracking-wider font-bold mb-1 block">Vocabular cheie (optional)</label>
+            <input
+              type="text"
+              value={customCtx.vocabulary || ""}
+              onChange={(e) => setCustomCtx((c) => ({ ...c, vocabulary: e.target.value }))}
+              placeholder="ex: der Pilot, das Flugzeug, die Landung (separat prin virgula)"
+              className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg outline-none focus:border-violet-500 text-sm"
+            />
+            <p className="text-xs text-slate-500 mt-1">Cuvinte germane pe care vrei sa apara in exercitii. Lasa gol daca nu stii.</p>
+          </div>
+          {!apiAvailable && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+              <AlertTriangle size={11} className="inline mr-1" /> Custom topic functioneaza doar cu Supabase configurat.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Difficulty selection */}
-      {pack && (
+      {selection && (
         <div>
           <div className="text-xs uppercase tracking-wider text-slate-500 font-bold mb-2">2. Dificultate</div>
           <div className="flex gap-2 flex-wrap items-center">
@@ -150,9 +231,9 @@ export function ScenarioStudio({ onBack }: Props) {
                 {d}
               </Button>
             ))}
-            {history[pack.id] && (
+            {selectionKey && history[selectionKey] && history[selectionKey].totalAttempts > 0 && (
               <Pill tone="violet">
-                Recomandat: {history[pack.id].currentLevel} ({history[pack.id].totalCorrect}/{history[pack.id].totalAttempts})
+                Recomandat: {history[selectionKey].currentLevel} ({history[selectionKey].totalCorrect}/{history[selectionKey].totalAttempts})
               </Pill>
             )}
           </div>
@@ -160,8 +241,8 @@ export function ScenarioStudio({ onBack }: Props) {
       )}
 
       {/* Generate */}
-      {pack && (
-        <Button variant="primary" size="lg" onClick={generate} disabled={loading}>
+      {selection && (
+        <Button variant="primary" size="lg" onClick={generate} disabled={loading || !canGenerate}>
           {loading ? (
             <>
               <Loader2 size={16} className="animate-spin" /> Se genereaza...

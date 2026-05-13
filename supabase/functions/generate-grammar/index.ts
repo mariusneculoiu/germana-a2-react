@@ -2,16 +2,16 @@
 // Edge Function: generate-grammar
 // ------------------------------------------------------------
 // Genereaza exercitii contextuale de gramatica germana A2.
-// Cheia AI (LOVABLE_API_KEY) traieste aici, NU in client.
+// Apeleaza direct Google Gemini API (free tier).
+// Cheia GEMINI_API_KEY traieste server-side, NU in client.
 //
-// Body JSON expected:
+// Body JSON:
 // {
-//   "packId": "software-engineering" | "switzerland-life" | "health-nutrition" | "board-games",
+//   "packId": string,
+//   "customContext"?: { "label": string, "description": string, "vocabulary"?: string },
 //   "difficulty": "Usor" | "Mediu" | "Greu",
-//   "count": 5
+//   "count": number
 // }
-//
-// Returns: { exercises: GeneratedExercise[] }
 // ============================================================
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -22,7 +22,6 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// Same context packs as the React client (kept in sync manually).
 const PACKS: Record<string, { label: string; description: string; vocab: string[]; themes: string[] }> = {
   "software-engineering": {
     label: "Software Engineering",
@@ -48,46 +47,128 @@ const PACKS: Record<string, { label: string; description: string; vocab: string[
     vocab: ["das Brettspiel", "die Regel", "die Runde", "der Wuerfel", "die Karte", "der Spieler", "die Strategie", "gewinnen", "verlieren"],
     themes: ["Reguli", "Strategie", "Runda", "Carti/zaruri"],
   },
+  "restaurant-food": {
+    label: "Restaurant & Cafenea",
+    description: "Comanda, meniu, plata, rezervare",
+    vocab: ["die Speisekarte", "die Bestellung", "der Tisch", "die Rechnung", "das Trinkgeld", "reservieren", "bestellen", "bezahlen", "der Kellner", "vegetarisch"],
+    themes: ["Comanda mancare", "Plata", "Rezervare", "Recomandari"],
+  },
+  "travel-hotel": {
+    label: "Calatorie & Hotel",
+    description: "Check-in, biletul, atractii turistice",
+    vocab: ["der Flug", "die Fahrkarte", "das Hotel", "die Reservierung", "das Doppelzimmer", "die Sehenswuerdigkeit", "das Gepaeck", "umsteigen", "stornieren"],
+    themes: ["Check-in hotel", "Bilet tren/avion", "Atractii turistice", "Probleme cazare"],
+  },
+  "doctor-appointment": {
+    label: "La Doctor",
+    description: "Simptome, dureri, prescriptie medicala",
+    vocab: ["der Arzt", "der Termin", "die Schmerzen", "das Fieber", "die Erkaeltung", "das Medikament", "die Krankschreibung", "das Rezept", "die Apotheke"],
+    themes: ["Programare doctor", "Descriere simptome", "Reteta", "Farmacia"],
+  },
+  "family-home": {
+    label: "Familie & Casa",
+    description: "Familia, parinti, copii, treburi casnice",
+    vocab: ["die Familie", "die Eltern", "die Kinder", "der Haushalt", "kochen", "putzen", "abwaschen", "die Wohnung", "der Geburtstag", "die Schule"],
+    themes: ["Membrii familiei", "Treburi casnice", "Mese impreuna", "Cresterea copiilor"],
+  },
+  "news-politics": {
+    label: "Stiri & Actualitate",
+    description: "Ziar, evenimente actuale, opinii",
+    vocab: ["die Nachrichten", "die Zeitung", "das Ereignis", "die Wahl", "die Regierung", "die Umwelt", "berichten", "die Meinung", "die Politik"],
+    themes: ["Stiri zilnice", "Politica", "Mediu", "Tehnologie", "Opinii"],
+  },
+  "weather-seasons": {
+    label: "Vremea & Anotimpurile",
+    description: "Prognoza meteo, anotimpuri, activitati",
+    vocab: ["das Wetter", "die Sonne", "der Regen", "der Schnee", "warm", "kalt", "windig", "der Sommer", "der Winter", "die Temperatur"],
+    themes: ["Prognoza meteo", "Anotimpuri", "Imbracaminte", "Activitati outdoor"],
+  },
+  "shopping-clothes": {
+    label: "Cumparaturi & Haine",
+    description: "Magazin, marime, culoare, reduceri",
+    vocab: ["das Geschaeft", "die Groesse", "die Farbe", "der Preis", "der Rabatt", "anprobieren", "zurueckgeben", "kaufen", "die Kasse", "online bestellen"],
+    themes: ["La magazin", "Marimi", "Reduceri", "Returnari", "Online"],
+  },
 };
 
-function buildPrompt(packId: string, difficulty: string, count: number): string {
-  const pack = PACKS[packId];
-  if (!pack) throw new Error(`Unknown pack: ${packId}`);
-  return `You are a German language teacher creating A2-level exercises in Romanian for a learner.
-
-CONTEXT: ${pack.label} (${pack.description})
-THEMES: ${pack.themes.join(", ")}
-VOCABULARY TO INCORPORATE: ${pack.vocab.join(", ")}
-
-Generate exactly ${count} German grammar exercises at difficulty level "${difficulty}".
-Each exercise must be situated in the chosen context (realistic, concrete sentences from this domain).
-Distribute exercise types across the 5 categories: Lückentext, Multiple Choice, Umformung, Satzbau, Fehlerkorrektur.
-
-REQUIREMENTS:
-- "question" is in German (or instruction in Romanian + German sentence)
-- "correctAnswer" is the German answer/corrected sentence/word
-- "explanationRomanian" is a 1-2 sentence explanation IN ROMANIAN of the grammar rule
-- For "Multiple Choice", provide exactly 4 options where wrong ones are common learner mistakes (capcane)
-- For "Satzbau", "options" must be the words/tokens to reorder
-- For "Fehlerkorrektur", "question" contains the sentence with exactly 1 grammar error
-- For "Lückentext", use "___" in the question; "correctAnswer" is just the missing word(s)
-- For "Umformung", "question" describes the transformation followed by the sentence
-- IDs: "${packId}-${difficulty.toLowerCase()}-1" through "${packId}-${difficulty.toLowerCase()}-${count}"`;
+interface CustomContextBody {
+  label?: string;
+  description?: string;
+  vocabulary?: string;
 }
+
+function buildPrompt(
+  packLabel: string,
+  packDescription: string,
+  themes: string[],
+  vocab: string[],
+  difficulty: string,
+  count: number,
+): string {
+  return `Esti un profesor expert de limba germana care creeaza exercitii structurate de nivel A2 in romana pentru elevi romani.
+
+CONTEXT: ${packLabel} (${packDescription})
+TEME: ${themes.join(", ")}
+VOCABULAR DE INCORPORAT (foloseste liber, nu fortat pe tot): ${vocab.join(", ")}
+
+Genereaza exact ${count} exercitii de gramatica germana la nivelul de dificultate "${difficulty}".
+Fiecare exercitiu trebuie sa fie situat in contextul de mai sus (propozitii realiste, concrete din acest domeniu).
+Distribuie tipurile de exercitii peste cele 5 categorii: Lückentext, Multiple Choice, Umformung, Satzbau, Fehlerkorrektur.
+
+CERINTE:
+- "question" e in germana (sau instructiune in romana + propozitie germana)
+- "correctAnswer" e raspunsul/propozitia corecta in germana
+- "explanationRomanian" e o explicatie de 1-2 propozitii IN ROMANA a regulii gramaticale
+- Pentru "Multiple Choice", da exact 4 optiuni unde cele gresite sunt capcane comune ale elevilor
+- Pentru "Satzbau", "options" trebuie sa fie cuvintele/tokens-urile pentru reordonare
+- Pentru "Fehlerkorrektur", "question" contine o propozitie cu exact 1 eroare gramaticala
+- Pentru "Lückentext", foloseste "___" in question pentru blank; "correctAnswer" e doar cuvantul lipsa
+- Pentru "Umformung", "question" descrie transformarea urmata de propozitie
+- ID-uri unice, sufix numeric incremental
+
+Returneaza DOAR JSON valid in formatul cerut. Fara markdown, fara explicatii in afara JSON-ului.`;
+}
+
+// Schema for Gemini structured output (responseSchema)
+const RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    exercises: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          id: { type: "STRING" },
+          type: {
+            type: "STRING",
+            enum: ["Lückentext", "Multiple Choice", "Umformung", "Satzbau", "Fehlerkorrektur"],
+          },
+          difficulty: { type: "STRING", enum: ["Usor", "Mediu", "Greu"] },
+          question: { type: "STRING" },
+          options: { type: "ARRAY", items: { type: "STRING" } },
+          correctAnswer: { type: "STRING" },
+          explanationRomanian: { type: "STRING" },
+        },
+        required: ["id", "type", "difficulty", "question", "correctAnswer", "explanationRomanian"],
+      },
+    },
+  },
+  required: ["exercises"],
+};
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
   try {
-    const { packId, difficulty, count = 5 } = await req.json();
+    const body = await req.json();
+    const { packId, difficulty, count = 5, customContext } = body as {
+      packId: string;
+      difficulty: string;
+      count?: number;
+      customContext?: CustomContextBody;
+    };
 
-    if (!packId || !PACKS[packId]) {
-      return new Response(JSON.stringify({ error: "Invalid packId" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
     if (!["Usor", "Mediu", "Greu"].includes(difficulty)) {
       return new Response(JSON.stringify({ error: "Invalid difficulty" }), {
         status: 400,
@@ -96,105 +177,98 @@ serve(async (req) => {
     }
     const wantCount = Math.max(1, Math.min(10, Number(count) || 5));
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      return new Response(JSON.stringify({ error: "LOVABLE_API_KEY not configured on server" }), {
+    let packLabel: string;
+    let packDescription: string;
+    let themes: string[];
+    let vocab: string[];
+
+    if (packId === "custom") {
+      if (!customContext?.description || customContext.description.trim().length < 5) {
+        return new Response(JSON.stringify({ error: "Descrierea contextului custom trebuie sa aiba minim 5 caractere." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (customContext.description.length > 500) {
+        return new Response(JSON.stringify({ error: "Descrierea e prea lunga (max 500 caractere)." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      packLabel = customContext.label?.trim() || "Custom context";
+      packDescription = customContext.description.trim();
+      themes = [packLabel];
+      vocab = (customContext.vocabulary || "").split(/[,;]/).map((s) => s.trim()).filter((s) => s.length > 0);
+    } else if (PACKS[packId]) {
+      const pack = PACKS[packId];
+      packLabel = pack.label;
+      packDescription = pack.description;
+      themes = pack.themes;
+      vocab = pack.vocab;
+    } else {
+      return new Response(JSON.stringify({ error: `Unknown packId: ${packId}` }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    if (!GEMINI_API_KEY) {
+      return new Response(JSON.stringify({ error: "GEMINI_API_KEY not configured on server. Run: supabase secrets set GEMINI_API_KEY=..." }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const systemPrompt =
-      "Esti un profesor expert de limba germana care creeaza exercitii structurate de nivel A2 in romana pentru elevi romani. Returnezi DOAR JSON valid.";
+    const prompt = buildPrompt(packLabel, packDescription, themes, vocab, difficulty, wantCount);
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    // Call Google Gemini API directly with structured output
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const response = await fetch(url, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: buildPrompt(packId, difficulty, wantCount) },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "return_exercises",
-              description: "Returneaza array de exercitii structurate",
-              parameters: {
-                type: "object",
-                properties: {
-                  exercises: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        id: { type: "string" },
-                        type: {
-                          type: "string",
-                          enum: ["Lückentext", "Multiple Choice", "Umformung", "Satzbau", "Fehlerkorrektur"],
-                        },
-                        difficulty: {
-                          type: "string",
-                          enum: ["Usor", "Mediu", "Greu"],
-                        },
-                        question: { type: "string" },
-                        options: {
-                          type: "array",
-                          items: { type: "string" },
-                        },
-                        correctAnswer: { type: "string" },
-                        explanationRomanian: { type: "string" },
-                      },
-                      required: ["id", "type", "difficulty", "question", "correctAnswer", "explanationRomanian"],
-                    },
-                  },
-                },
-                required: ["exercises"],
-                additionalProperties: false,
-              },
-            },
-          },
-        ],
-        tool_choice: { type: "function", function: { name: "return_exercises" } },
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: RESPONSE_SCHEMA,
+          temperature: 0.7,
+        },
       }),
     });
 
     if (!response.ok) {
+      const errText = await response.text();
+      console.error("Gemini error:", response.status, errText);
       if (response.status === 429) {
-        return new Response(JSON.stringify({ error: "Prea multe cereri. Incearca in cateva momente." }), {
+        return new Response(JSON.stringify({ error: "Limita Gemini API atinsa - asteapta cateva minute si reincearca." }), {
           status: 429,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      if (response.status === 402) {
-        return new Response(JSON.stringify({ error: "Credit AI epuizat." }), {
-          status: 402,
+      if (response.status === 401 || response.status === 403) {
+        return new Response(JSON.stringify({ error: "Cheia GEMINI_API_KEY este invalida sau lipseste permisiuni." }), {
+          status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      const errText = await response.text();
-      console.error("AI gateway error:", response.status, errText);
-      return new Response(JSON.stringify({ error: `Eroare la serviciul AI (${response.status})` }), {
+      return new Response(JSON.stringify({ error: `Eroare Gemini (${response.status}): ${errText.substring(0, 200)}` }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     const data = await response.json();
-    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
-    if (!toolCall?.function?.arguments) {
-      console.error("No tool call in response:", JSON.stringify(data));
-      return new Response(JSON.stringify({ error: "Raspuns invalid de la AI" }), {
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      console.error("No text in Gemini response:", JSON.stringify(data));
+      return new Response(JSON.stringify({ error: "Raspuns invalid de la Gemini" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    const parsed = JSON.parse(toolCall.function.arguments);
+
+    const parsed = JSON.parse(text);
     return new Response(JSON.stringify(parsed), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

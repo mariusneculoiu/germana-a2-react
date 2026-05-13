@@ -13,14 +13,15 @@
 // the Edge Function returns an error.
 // ============================================================
 
-import type { ContextPack, Difficulty, GeneratedExercise } from "@/types";
+import type { ContextPack, CustomContext, Difficulty, GeneratedExercise } from "@/types";
 import { findPack } from "./contextPacks";
 import { getSupabase, hasSupabase } from "@/integrations/supabase/client";
 
 interface GenerateOptions {
-  packId: ContextPack["id"];
+  packId: ContextPack["id"] | "custom";
   difficulty: Difficulty;
   count?: number;
+  customContext?: CustomContext;
 }
 
 const VALID_TYPES = ["Lückentext", "Multiple Choice", "Umformung", "Satzbau", "Fehlerkorrektur"] as const;
@@ -58,7 +59,7 @@ function validateExercise(ex: any, idx: number): GeneratedExercise {
 // MOCK DATA - returned when no API key is configured.
 // All content is original (kept short - 3 per pack per difficulty).
 // ============================================================
-const MOCK_BY_PACK: Record<ContextPack["id"], GeneratedExercise[]> = {
+const MOCK_BY_PACK: Record<string, GeneratedExercise[] | undefined> = {
   "software-engineering": [
     { id: "se-mock-1", type: "Lückentext", difficulty: "Usor", question: "Ich ___ einen Pull Request für das neue Feature.", options: null, correctAnswer: "öffne", explanationRomanian: "'oeffnen' la persoana 1 singular -> 'ich oeffne'. Verb regulat." },
     { id: "se-mock-2", type: "Multiple Choice", difficulty: "Mediu", question: "Im Daily Stand-up sprechen wir ___ die Aufgaben für heute.", options: ["mit", "über", "auf", "von"], correctAnswer: "über", explanationRomanian: "'sprechen ÜBER + Akk.' = a vorbi DESPRE un subiect. 'sprechen mit' = a vorbi CU cineva." },
@@ -103,17 +104,27 @@ export interface GenerationResult {
  * Main entry. Tries the Supabase Edge Function, falls back to local mocks on any error.
  */
 export async function generateExercises(opts: GenerateOptions): Promise<GenerationResult> {
-  const pack = findPack(opts.packId);
-  if (!pack) throw new Error(`Unknown pack id: ${opts.packId}`);
+  const isCustom = opts.packId === "custom";
+  if (!isCustom) {
+    const pack = findPack(opts.packId);
+    if (!pack) throw new Error(`Unknown pack id: ${opts.packId}`);
+  }
+  if (isCustom && (!opts.customContext || !opts.customContext.description)) {
+    throw new Error("customContext.description is required for custom packs");
+  }
   const count = opts.count ?? 5;
 
   // 1. Try Supabase Edge Function
   const supabase = getSupabase();
   if (supabase) {
     try {
-      const { data, error } = await supabase.functions.invoke("generate-grammar", {
-        body: { packId: opts.packId, difficulty: opts.difficulty, count },
-      });
+      const body: Record<string, unknown> = {
+        packId: opts.packId,
+        difficulty: opts.difficulty,
+        count,
+      };
+      if (isCustom) body.customContext = opts.customContext;
+      const { data, error } = await supabase.functions.invoke("generate-grammar", { body });
       if (error) throw error;
       if (!data?.exercises || !Array.isArray(data.exercises)) {
         throw new Error("Edge function returned invalid shape");
@@ -122,9 +133,24 @@ export async function generateExercises(opts: GenerateOptions): Promise<Generati
       return { exercises: validated, source: "edge-function" };
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e);
-      // Fall through to mock
-      const fallback = filterByDifficulty(MOCK_BY_PACK[opts.packId], opts.difficulty).slice(0, count);
-      const final = fallback.length ? fallback : MOCK_BY_PACK[opts.packId].slice(0, count);
+      // Fall through to mock - but only if not custom (no mock for custom)
+      if (isCustom) {
+        return {
+          exercises: [],
+          source: "mock",
+          error: `Edge function failed (${err}). Pentru context custom e necesara conexiunea AI - verifica Supabase / LOVABLE_API_KEY.`,
+        };
+      }
+      const packMocks = MOCK_BY_PACK[opts.packId];
+      if (!packMocks) {
+        return {
+          exercises: [],
+          source: "mock",
+          error: `Edge function failed (${err}) si acest pack nu are exercitii preincarcate. Configureaza Supabase.`,
+        };
+      }
+      const fallback = filterByDifficulty(packMocks, opts.difficulty).slice(0, count);
+      const final = fallback.length ? fallback : packMocks.slice(0, count);
       return {
         exercises: final,
         source: "mock",
@@ -134,7 +160,21 @@ export async function generateExercises(opts: GenerateOptions): Promise<Generati
   }
 
   // 2. No Supabase configured at all - use mock with a hint
+  if (isCustom) {
+    return {
+      exercises: [],
+      source: "mock",
+      error: "Pentru context custom e nevoie de Supabase configurat - nu exista mock pentru context custom.",
+    };
+  }
   const mocks = MOCK_BY_PACK[opts.packId];
+  if (!mocks) {
+    return {
+      exercises: [],
+      source: "mock",
+      error: "Acest pack n-are mock - configureaza Supabase pentru generare AI.",
+    };
+  }
   const filtered = filterByDifficulty(mocks, opts.difficulty).slice(0, count);
   return {
     exercises: filtered.length ? filtered : mocks.slice(0, count),
